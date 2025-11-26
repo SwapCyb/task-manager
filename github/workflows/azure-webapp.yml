@@ -1,0 +1,71 @@
+name: Deploy Flask to Azure Web App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: swapnil-taskmanager
+  PYTHON_VERSION: "3.11"
+  HEALTH_URL: https://swapnil-taskmanager.azurewebsites.net/health
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Show installed packages
+        run: pip list
+
+      - name: Run tests (optional)
+        run: |
+          if [ -f tests/test_health.py ]; then
+            pip install pytest
+            pytest -q
+          else
+            echo "No tests found. Skipping."
+          fi
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .
+
+      - name: Post-deploy health check
+        run: |
+          echo "Checking $HEALTH_URL ..."
+          for i in {1..12}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            echo "Attempt $i: got $code, retrying..."
+            sleep 10
+          done
+          echo "Health check failed."
+          exit 1
